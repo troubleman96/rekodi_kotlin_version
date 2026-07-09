@@ -86,7 +86,14 @@ class RecordingBubbleView(
                 mini.visibility = View.VISIBLE
                 expanded.visibility = View.GONE
                 bubbleView?.findViewById<TextView>(R.id.state_text)?.text = "Rekodi"
+                bubbleView?.findViewById<TextView>(R.id.timer_text)?.text = "Ready"
                 showExpandedPanel()
+            }
+            RecordingState.COUNTDOWN -> {
+                mini.visibility = View.VISIBLE
+                expanded.visibility = View.GONE
+                bubbleView?.findViewById<TextView>(R.id.state_text)?.text = "Starting..."
+                bubbleView?.alpha = 1f
             }
             RecordingState.RECORDING -> {
                 mini.visibility = View.VISIBLE
