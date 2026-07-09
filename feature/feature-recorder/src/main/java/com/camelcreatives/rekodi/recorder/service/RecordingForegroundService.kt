@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -15,11 +16,14 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.camelcreatives.rekodi.data.local.entity.RecordingEntity
 import com.camelcreatives.rekodi.data.repository.RecordingRepository
 import com.camelcreatives.rekodi.recorder.R
 import com.camelcreatives.rekodi.recorder.model.RecordingState
+import com.camelcreatives.rekodi.recorder.overlay.RecordingBubbleView
+import com.camelcreatives.rekodi.recorder.overlay.ZoomOverlayView
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +43,9 @@ import javax.inject.Inject
 class RecordingForegroundService : Service() {
 
     @Inject lateinit var recordingRepository: RecordingRepository
+    @Inject lateinit var windowManager: WindowManager
+
+    private var bubbleView: RecordingBubbleView? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _recordingState = MutableStateFlow(RecordingState.IDLE)
@@ -59,6 +66,7 @@ class RecordingForegroundService : Service() {
         const val ACTION_STOP = "com.camelcreatives.rekodi.action.STOP"
         const val ACTION_PAUSE = "com.camelcreatives.rekodi.action.PAUSE"
         const val ACTION_RESUME = "com.camelcreatives.rekodi.action.RESUME"
+        const val ACTION_SHOW_BUBBLE = "com.camelcreatives.rekodi.action.SHOW_BUBBLE"
         const val ACTION_UPDATE_TAP_COUNT = "com.camelcreatives.rekodi.action.UPDATE_TAP_COUNT"
         const val ACTION_CRASH_SAFEGUARD = "com.camelcreatives.rekodi.action.CRASH_SAFEGUARD"
         const val EXTRA_RESULT_CODE = "extra_result_code"
@@ -76,7 +84,20 @@ class RecordingForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_SHOW_BUBBLE -> {
+                startForeground(NOTIFICATION_ID, buildNotification())
+                showBubble()
+            }
             ACTION_START -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification())
+                }
+                
+                showBubble() // Ensure bubble is showing and updated
+                bubbleView?.updateState(RecordingState.RECORDING)
+
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
                 val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
@@ -85,7 +106,14 @@ class RecordingForegroundService : Service() {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA)
                 }
                 if (resultCode != -1 && data != null) {
-                    startRecording(resultCode, data)
+                    try {
+                        startRecording(resultCode, data)
+                    } catch (e: Exception) {
+                        android.util.Log.e("RecordingService", "Failed to start recording", e)
+                        stopRecording()
+                    }
+                } else {
+                    stopRecording()
                 }
             }
             ACTION_STOP -> stopRecording()
@@ -94,11 +122,24 @@ class RecordingForegroundService : Service() {
             ACTION_UPDATE_TAP_COUNT -> {
                 val count = intent.getIntExtra(EXTRA_TAP_COUNT, 0)
                 _tapCount.value = count
+                bubbleView?.updateTapCount(count)
                 updateNotification()
             }
             ACTION_CRASH_SAFEGUARD -> safeguardRecording()
         }
         return START_REDELIVER_INTENT
+    }
+
+    private fun showBubble() {
+        if (bubbleView == null) {
+            bubbleView = RecordingBubbleView(this, windowManager)
+            bubbleView?.show(_recordingState.value)
+            bubbleView?.setStateCallback { state ->
+                // Handle state changes from bubble if needed
+            }
+        } else {
+            bubbleView?.updateState(_recordingState.value)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -125,12 +166,27 @@ class RecordingForegroundService : Service() {
         val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mgr.getMediaProjection(resultCode, data)
 
+        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val metrics = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+        
+        // Ensure even dimensions
+        val screenWidth = metrics.widthPixels and 0xFFFFFFFE.toInt()
+        val screenHeight = metrics.heightPixels and 0xFFFFFFFE.toInt()
+        val density = metrics.densityDpi
+
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val fileName = "Rekodi_$timestamp.mp4"
         val dir = getExternalFilesDir(null)
         outputFile = File(dir, fileName)
 
-        mediaRecorder = MediaRecorder().apply {
+        mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(this)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }.apply {
             setAudioSource(MediaRecorder.AudioSource.MIC)
             setVideoSource(MediaRecorder.VideoSource.SURFACE)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -138,7 +194,7 @@ class RecordingForegroundService : Service() {
             setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             setVideoEncodingBitRate(8_000_000)
             setVideoFrameRate(30)
-            setVideoSize(1920, 1080)
+            setVideoSize(screenWidth, screenHeight)
             setOutputFile(outputFile?.absolutePath)
             prepare()
         }
@@ -147,7 +203,7 @@ class RecordingForegroundService : Service() {
         if (surface != null) {
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "RekodiDisplay",
-                1920, 1080, 320,
+                screenWidth, screenHeight, density,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 surface, null, null
             )
@@ -155,7 +211,7 @@ class RecordingForegroundService : Service() {
 
         mediaRecorder?.start()
         _recordingState.value = RecordingState.RECORDING
-        startForeground(NOTIFICATION_ID, buildNotification())
+        updateNotification()
         startTimer()
 
         serviceScope.launch {
@@ -165,7 +221,7 @@ class RecordingForegroundService : Service() {
                 mimeType = "video/mp4",
                 frameRate = 30,
                 bitrate = 8_000_000,
-                resolution = "1920x1080"
+                resolution = "${screenWidth}x${screenHeight}"
             )
             recordingId = recordingRepository.insertRecording(entity)
         }
@@ -177,7 +233,9 @@ class RecordingForegroundService : Service() {
                 stop()
                 release()
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.e("RecordingService", "Error stopping MediaRecorder", e)
+        }
         mediaRecorder = null
         virtualDisplay?.release()
         virtualDisplay = null
@@ -185,6 +243,7 @@ class RecordingForegroundService : Service() {
         mediaProjection = null
 
         _recordingState.value = RecordingState.IDLE
+        bubbleView?.updateState(RecordingState.IDLE)
         val elapsed = _elapsedSeconds.value
         _elapsedSeconds.value = 0
 
@@ -205,22 +264,32 @@ class RecordingForegroundService : Service() {
         }
 
         stopForeground(STOP_FOREGROUND_REMOVE)
+        // Only stop self if not showing bubble, or maybe we want to keep service alive for bubble?
+        // Let's keep it simple for now and stop everything.
+        bubbleView?.hide()
+        bubbleView = null
         stopSelf()
     }
 
     private fun pauseRecording() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try { mediaRecorder?.pause() } catch (_: Exception) {}
+            try { mediaRecorder?.pause() } catch (e: Exception) {
+                android.util.Log.e("RecordingService", "Error pausing MediaRecorder", e)
+            }
         }
         _recordingState.value = RecordingState.PAUSED
+        bubbleView?.updateState(RecordingState.PAUSED)
         updateNotification()
     }
 
     private fun resumeRecording() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try { mediaRecorder?.resume() } catch (_: Exception) {}
+            try { mediaRecorder?.resume() } catch (e: Exception) {
+                android.util.Log.e("RecordingService", "Error resuming MediaRecorder", e)
+            }
         }
         _recordingState.value = RecordingState.RECORDING
+        bubbleView?.updateState(RecordingState.RECORDING)
         updateNotification()
     }
 
@@ -251,6 +320,15 @@ class RecordingForegroundService : Service() {
             while (_recordingState.value == RecordingState.RECORDING) {
                 delay(1000)
                 _elapsedSeconds.value = _elapsedSeconds.value + 1
+                
+                val elapsed = _elapsedSeconds.value
+                val mins = elapsed / 60
+                val secs = elapsed % 60
+                val timeStr = String.format("%02d:%02d", mins, secs)
+                
+                launch(Dispatchers.Main) {
+                    bubbleView?.updateTimerText(timeStr)
+                }
                 updateNotification()
             }
         }

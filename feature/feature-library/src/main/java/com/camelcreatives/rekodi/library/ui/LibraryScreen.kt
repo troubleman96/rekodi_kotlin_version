@@ -145,10 +145,18 @@ fun LibraryScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
-                    val intent = Intent(context, Class.forName("com.camelcreatives.rekodi.service.MediaProjectionTrampolineActivity")).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    if (!android.provider.Settings.canDrawOverlays(context)) {
+                        val intent = Intent(
+                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:${context.packageName}")
+                        )
+                        context.startActivity(intent)
+                    } else {
+                        val intent = Intent(context, Class.forName("com.camelcreatives.rekodi.recorder.service.RecordingForegroundService")).apply {
+                            action = "com.camelcreatives.rekodi.action.SHOW_BUBBLE"
+                        }
+                        context.startForegroundService(intent)
                     }
-                    context.startActivity(intent)
                 },
                 containerColor = RekodiAmber
             ) {
