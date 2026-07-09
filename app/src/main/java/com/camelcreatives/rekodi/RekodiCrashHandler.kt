@@ -3,7 +3,6 @@ package com.camelcreatives.rekodi
 import android.app.Application
 import android.content.Intent
 import com.camelcreatives.rekodi.recorder.service.RecordingForegroundService
-import com.camelcreatives.rekodi.recorder.service.RecordingState
 
 class RekodiCrashHandler(private val app: Application) : Thread.UncaughtExceptionHandler {
     private val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()

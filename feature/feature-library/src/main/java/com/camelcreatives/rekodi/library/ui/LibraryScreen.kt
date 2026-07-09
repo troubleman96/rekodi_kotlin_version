@@ -1,5 +1,6 @@
 package com.camelcreatives.rekodi.library.ui
 
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,13 +61,57 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import androidx.hilt.navigation.compose.hiltViewModel
+
+@HiltViewModel
+class LibraryViewModel @Inject constructor(
+    private val repository: RecordingRepository
+) : ViewModel() {
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private val _filter = MutableStateFlow("all")
+    val filter: StateFlow<String> = _filter.asStateFlow()
+
+    val recordings: StateFlow<List<RecordingEntity>> = combine(
+        _searchQuery,
+        _filter,
+        repository.getAllRecordings()
+    ) { query, filter, allRecordings ->
+        allRecordings.filter { recording ->
+            val matchesQuery = recording.fileName.contains(query, ignoreCase = true)
+            val matchesFilter = when (filter) {
+                "video" -> recording.mimeType.startsWith("video")
+                "audio" -> recording.mimeType.startsWith("audio")
+                "favorites" -> recording.isFavorite
+                else -> true
+            }
+            matchesQuery && matchesFilter
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun onSearchQueryChange(query: String) {
+        _searchQuery.value = query
+    }
+
+    fun onFilterChange(filter: String) {
+        _filter.value = filter
+    }
+
+    fun toggleFavorite(recording: RecordingEntity) {
+        viewModelScope.launch {
+            repository.updateRecording(recording.copy(isFavorite = !recording.isFavorite))
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -74,13 +119,14 @@ fun LibraryScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToEditor: (Long) -> Unit,
     onNavigateToDetail: (Long) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: LibraryViewModel = hiltViewModel()
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf("all") }
-    var recordings by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val filter by viewModel.filter.collectAsStateWithLifecycle()
+    val recordings by viewModel.recordings.collectAsStateWithLifecycle()
 
-    val recordingRepository: RecordingRepository? = null
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Scaffold(
         topBar = {
@@ -98,7 +144,12 @@ fun LibraryScreen(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { },
+                onClick = {
+                    val intent = Intent(context, Class.forName("com.camelcreatives.rekodi.service.MediaProjectionTrampolineActivity")).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                },
                 containerColor = RekodiAmber
             ) {
                 Icon(
@@ -117,7 +168,7 @@ fun LibraryScreen(
         ) {
             OutlinedTextField(
                 value = searchQuery,
-                onValueChange = { searchQuery = it },
+                onValueChange = viewModel::onSearchQueryChange,
                 placeholder = { Text("Search recordings...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 modifier = Modifier.fillMaxWidth(),
@@ -133,7 +184,7 @@ fun LibraryScreen(
                 listOf("all", "video", "audio", "favorites").forEach { f ->
                     FilterChip(
                         selected = filter == f,
-                        onClick = { filter = f },
+                        onClick = { viewModel.onFilterChange(f) },
                         label = { Text(f.replaceFirstChar { it.uppercase() }) },
                         leadingIcon = when (f) {
                             "video" -> ({ Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(16.dp)) })
@@ -154,13 +205,13 @@ fun LibraryScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "No recordings yet",
+                            text = if (searchQuery.isEmpty()) "No recordings yet" else "No results found",
                             style = MaterialTheme.typography.headlineSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Tap the record button to start capturing your screen",
+                            text = if (searchQuery.isEmpty()) "Tap the record button to start capturing your screen" else "Try a different search term",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -170,10 +221,11 @@ fun LibraryScreen(
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(recordings) { recording ->
+                    items(recordings, key = { it.id }) { recording ->
                         RecordingListItem(
                             recording = recording,
-                            onClick = { onNavigateToDetail(recording.id) }
+                            onClick = { onNavigateToDetail(recording.id) },
+                            onFavoriteClick = { viewModel.toggleFavorite(recording) }
                         )
                     }
                 }
@@ -185,7 +237,8 @@ fun LibraryScreen(
 @Composable
 fun RecordingListItem(
     recording: RecordingEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onFavoriteClick: () -> Unit
 ) {
     Card(
         onClick = onClick,
@@ -256,7 +309,7 @@ fun RecordingListItem(
             }
 
             Column {
-                IconButton(onClick = { }) {
+                IconButton(onClick = onFavoriteClick) {
                     Icon(
                         if (recording.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = "Favorite",

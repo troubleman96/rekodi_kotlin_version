@@ -159,9 +159,14 @@ class RecordingBubbleView(
 
         bubbleView?.findViewById<View>(R.id.btn_record)?.setOnClickListener {
             stateCallback?.invoke(RecordingState.RECORDING)
-            context.startForegroundService(Intent(context, RecordingForegroundService::class.java).apply {
-                action = RecordingForegroundService.ACTION_START
-            })
+            val intent = Intent().apply {
+                component = android.content.ComponentName(
+                    context.packageName,
+                    "com.camelcreatives.rekodi.service.MediaProjectionTrampolineActivity"
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
         }
 
         bubbleView?.findViewById<View>(R.id.btn_stop)?.setOnClickListener {

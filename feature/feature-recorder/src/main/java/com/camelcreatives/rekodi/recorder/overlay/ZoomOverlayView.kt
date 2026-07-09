@@ -59,6 +59,10 @@ class ZoomOverlayView(
         } catch (_: Exception) {}
     }
 
+    fun simulateTap(x: Float, y: Float) {
+        overlayView?.simulateTap(x, y)
+    }
+
     private class ZoomDrawView(context: Context) : View(context) {
         private val ripplePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE

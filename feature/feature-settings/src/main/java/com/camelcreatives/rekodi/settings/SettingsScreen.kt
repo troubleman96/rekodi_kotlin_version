@@ -147,6 +147,7 @@ private fun SettingsSection(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsDropdown(
     label: String,

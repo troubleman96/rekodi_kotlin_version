@@ -32,13 +32,14 @@ class TapDetectionAccessibilityService : AccessibilityService() {
         if (event == null || !isRecording) return
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED,
-            AccessibilityEvent.TYPE_VIEW_TOUCH_INTERACTION_START -> {
+            AccessibilityEvent.TYPE_TOUCH_INTERACTION_START -> {
                 tapCount++
                 updateTapCount()
                 zoomOverlay.let {
-                    if (event.source != null) {
-                        val pos = IntArray(2)
-                        event.source?.getLocationOnScreen(pos)
+                    event.source?.let { source ->
+                        val rect = android.graphics.Rect()
+                        source.getBoundsInScreen(rect)
+                        it.simulateTap(rect.centerX().toFloat(), rect.centerY().toFloat())
                     }
                 }
             }

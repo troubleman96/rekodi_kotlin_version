@@ -19,10 +19,10 @@ Rekodi is a free, open-source Android app for recording your screen and audio, w
 
 ## Build Requirements
 
-- Android Studio Hedgehog (2023.1.1) or later
-- JDK 17
+- Android Studio Ladybug (2024.2.1) or later
+- JDK 17 (established as toolchain)
 - Android SDK 35
-- Gradle 8.7+
+- Gradle 8.11.1+
 
 ## Building
 

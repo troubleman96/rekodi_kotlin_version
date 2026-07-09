@@ -78,7 +78,12 @@ class RecordingForegroundService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                val data = intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                }
                 if (resultCode != -1 && data != null) {
                     startRecording(resultCode, data)
                 }

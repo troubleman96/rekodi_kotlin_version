@@ -1,5 +1,6 @@
 package com.camelcreatives.buildlogic
 
+import org.gradle.api.JavaVersion
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.configure
@@ -35,6 +36,7 @@ class AndroidLibraryComposeConventionPlugin : Plugin<Project> {
                 add("implementation", platform(libs.findLibrary("compose-bom").get()))
                 add("implementation", libs.findLibrary("compose-ui").get())
                 add("implementation", libs.findLibrary("compose-material3").get())
+                add("implementation", libs.findLibrary("compose-material-icons-extended").get())
                 add("implementation", libs.findLibrary("compose-ui-tooling-preview").get())
                 add("implementation", libs.findLibrary("compose-foundation").get())
                 add("debugImplementation", libs.findLibrary("compose-ui-tooling").get())
