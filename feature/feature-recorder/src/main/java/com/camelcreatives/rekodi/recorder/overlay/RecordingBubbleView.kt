@@ -39,6 +39,7 @@ class RecordingBubbleView(
     private var initialTouchY = 0f
 
     private var stateCallback: ((RecordingState) -> Unit)? = null
+    private var closeListener: (() -> Unit)? = null
     private var tapCountText: TextView? = null
 
     fun show(state: RecordingState = RecordingState.IDLE) {
@@ -114,6 +115,10 @@ class RecordingBubbleView(
         stateCallback = callback
     }
 
+    fun setOnCloseListener(listener: () -> Unit) {
+        closeListener = listener
+    }
+
     private fun setupTouchListener(params: WindowManager.LayoutParams) {
         bubbleView?.setOnTouchListener { _, event ->
             when (event.action) {
@@ -183,6 +188,7 @@ class RecordingBubbleView(
 
         bubbleView?.findViewById<View>(R.id.btn_close)?.setOnClickListener {
             hide()
+            closeListener?.invoke()
         }
     }
 

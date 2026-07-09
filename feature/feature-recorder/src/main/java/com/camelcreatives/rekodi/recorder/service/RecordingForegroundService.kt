@@ -134,6 +134,11 @@ class RecordingForegroundService : Service() {
         if (bubbleView == null) {
             bubbleView = RecordingBubbleView(this, windowManager)
             bubbleView?.show(_recordingState.value)
+            bubbleView?.setOnCloseListener {
+                if (_recordingState.value == RecordingState.IDLE) {
+                    stopSelf()
+                }
+            }
             bubbleView?.setStateCallback { state ->
                 // Handle state changes from bubble if needed
             }
