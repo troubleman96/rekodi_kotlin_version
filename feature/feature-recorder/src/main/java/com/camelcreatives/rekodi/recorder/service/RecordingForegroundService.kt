@@ -114,9 +114,17 @@ class RecordingForegroundService : Service() {
                 
                 if (resultCode != -1 && data != null) {
                     try {
-                        startRecording(resultCode, data)
+                        // Get MediaProjection immediately while in foreground
+                        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                        mediaProjection = mgr.getMediaProjection(resultCode, data)
+                        if (mediaProjection != null) {
+                            startRecording()
+                        } else {
+                            Log.e(TAG, "MediaProjection was null")
+                            stopRecording()
+                        }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to start recording", e)
+                        Log.e(TAG, "Failed to initialize MediaProjection", e)
                         stopRecording()
                     }
                 } else {
@@ -173,7 +181,7 @@ class RecordingForegroundService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun startRecording(resultCode: Int, data: Intent) {
+    private fun startRecording() {
         Log.d(TAG, "startRecording")
         
         stateManager.updateState(RecordingState.COUNTDOWN)
@@ -191,20 +199,19 @@ class RecordingForegroundService : Service() {
             if (stateManager.recordingState.value != RecordingState.COUNTDOWN) return@launch
             
             mainHandler.post {
-                performStart(resultCode, data)
+                performStart()
             }
         }
     }
 
-    private fun performStart(resultCode: Int, data: Intent) {
+    private fun performStart() {
         serviceScope.launch {
             try {
                 val settings = settingsDataStore.settings.first()
-                val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                mediaProjection = mgr.getMediaProjection(resultCode, data)
+                
                 mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                     override fun onStop() {
-                        Log.d(TAG, "MediaProjection stopped")
+                        Log.d(TAG, "MediaProjection stopped callback")
                         stopRecording()
                     }
                 }, mainHandler)
@@ -213,9 +220,13 @@ class RecordingForegroundService : Service() {
                 @Suppress("DEPRECATION")
                 windowManager.defaultDisplay.getRealMetrics(metrics)
 
-                val screenWidth = metrics.widthPixels and 0xFFFFFFFE.toInt()
-                val screenHeight = metrics.heightPixels and 0xFFFFFFFE.toInt()
+                // Ensure dimensions are even for H.264
+                var screenWidth = metrics.widthPixels and 0xFFFFFFFE.toInt()
+                var screenHeight = metrics.heightPixels and 0xFFFFFFFE.toInt()
                 val density = metrics.densityDpi
+
+                // Cap resolution for stability if needed, but here we try native first
+                Log.d(TAG, "Recording resolution: ${screenWidth}x${screenHeight}")
 
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val fileName = "Rekodi_$timestamp.mp4"
@@ -234,10 +245,14 @@ class RecordingForegroundService : Service() {
                     }
                     setVideoSource(MediaRecorder.VideoSource.SURFACE)
                     setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                    setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                    
                     if (hasAudioPerm && settings.audioSource != "Mute") {
                         setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                        setAudioSamplingRate(settings.sampleRate)
+                        setAudioEncodingBitRate(128_000)
                     }
+                    
+                    setVideoEncoder(MediaRecorder.VideoEncoder.H264)
                     
                     val targetBitrate = when (settings.videoBitrate) {
                         "Low" -> 2_000_000
@@ -250,7 +265,13 @@ class RecordingForegroundService : Service() {
                     setVideoFrameRate(settings.videoFps)
                     setVideoSize(screenWidth, screenHeight)
                     setOutputFile(outputFile?.absolutePath)
-                    prepare()
+                    
+                    try {
+                        prepare()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "MediaRecorder prepare failed", e)
+                        throw e
+                    }
                 }
 
                 val surface = mediaRecorder?.surface
@@ -258,16 +279,22 @@ class RecordingForegroundService : Service() {
                     virtualDisplay = mediaProjection?.createVirtualDisplay(
                         "RekodiDisplay",
                         screenWidth, screenHeight, density,
-                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC,
                         surface, null, null
                     )
-                    Log.d(TAG, "VirtualDisplay created: $screenWidth x $screenHeight")
+                    Log.d(TAG, "VirtualDisplay created")
                 } else {
                     throw IllegalStateException("MediaRecorder surface is null")
                 }
 
-                mediaRecorder?.start()
-                Log.d(TAG, "MediaRecorder started")
+                try {
+                    mediaRecorder?.start()
+                    Log.d(TAG, "MediaRecorder started successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "MediaRecorder start failed", e)
+                    throw e
+                }
+
                 mainHandler.post {
                     stateManager.updateState(RecordingState.RECORDING)
                     bubbleView?.updateState(RecordingState.RECORDING)
@@ -292,8 +319,8 @@ class RecordingForegroundService : Service() {
                 )
                 recordingId = recordingRepository.insertRecording(entity)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to perform start", e)
-                stopRecording()
+                Log.e(TAG, "Failed to perform start in catch block", e)
+                mainHandler.post { stopRecording() }
             }
         }
     }
