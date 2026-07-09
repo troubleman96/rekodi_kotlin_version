@@ -8,22 +8,24 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import com.camelcreatives.rekodi.data.datastore.SettingsDataStore
 import com.camelcreatives.rekodi.data.local.entity.RecordingEntity
 import com.camelcreatives.rekodi.data.repository.RecordingRepository
 import com.camelcreatives.rekodi.recorder.R
 import com.camelcreatives.rekodi.recorder.model.RecordingState
 import com.camelcreatives.rekodi.recorder.overlay.RecordingBubbleView
-import com.camelcreatives.rekodi.recorder.overlay.ZoomOverlayView
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -39,27 +42,29 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
+private const val TAG = "RecordingService"
+
 @AndroidEntryPoint
 class RecordingForegroundService : Service() {
 
     @Inject lateinit var recordingRepository: RecordingRepository
     @Inject lateinit var windowManager: WindowManager
+    @Inject lateinit var stateManager: RecordingStateManager
+    @Inject lateinit var settingsDataStore: SettingsDataStore
 
     private var bubbleView: RecordingBubbleView? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val _recordingState = MutableStateFlow(RecordingState.IDLE)
-    val recordingState: StateFlow<RecordingState> = _recordingState.asStateFlow()
     private val _elapsedSeconds = MutableStateFlow(0L)
     val elapsedSeconds: StateFlow<Long> = _elapsedSeconds.asStateFlow()
-    private val _tapCount = MutableStateFlow(0)
-    val tapCount: StateFlow<Int> = _tapCount.asStateFlow()
 
     private var mediaProjection: MediaProjection? = null
     private var mediaRecorder: MediaRecorder? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var outputFile: File? = null
     private var recordingId: Long = -1
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
         const val ACTION_START = "com.camelcreatives.rekodi.action.START"
@@ -79,25 +84,26 @@ class RecordingForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "Service onCreate")
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand: action=${intent?.action}")
+        
+        // Call startForeground immediately to avoid crash
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && intent?.action == ACTION_START) {
+            startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
+
         when (intent?.action) {
             ACTION_SHOW_BUBBLE -> {
-                startForeground(NOTIFICATION_ID, buildNotification())
                 showBubble()
             }
             ACTION_START -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-                } else {
-                    startForeground(NOTIFICATION_ID, buildNotification())
-                }
-                
-                showBubble() // Ensure bubble is showing and updated
-                bubbleView?.updateState(RecordingState.RECORDING)
-
+                showBubble()
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
                 val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
@@ -105,14 +111,16 @@ class RecordingForegroundService : Service() {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(EXTRA_RESULT_DATA)
                 }
+                
                 if (resultCode != -1 && data != null) {
                     try {
                         startRecording(resultCode, data)
                     } catch (e: Exception) {
-                        android.util.Log.e("RecordingService", "Failed to start recording", e)
+                        Log.e(TAG, "Failed to start recording", e)
                         stopRecording()
                     }
                 } else {
+                    Log.e(TAG, "Invalid result code or data for ACTION_START")
                     stopRecording()
                 }
             }
@@ -121,35 +129,33 @@ class RecordingForegroundService : Service() {
             ACTION_RESUME -> resumeRecording()
             ACTION_UPDATE_TAP_COUNT -> {
                 val count = intent.getIntExtra(EXTRA_TAP_COUNT, 0)
-                _tapCount.value = count
+                stateManager.setTapCount(count)
                 bubbleView?.updateTapCount(count)
                 updateNotification()
             }
             ACTION_CRASH_SAFEGUARD -> safeguardRecording()
         }
-        return START_REDELIVER_INTENT
+        return START_NOT_STICKY
     }
 
     private fun showBubble() {
         if (bubbleView == null) {
             bubbleView = RecordingBubbleView(this, windowManager)
-            bubbleView?.show(_recordingState.value)
+            bubbleView?.show(stateManager.recordingState.value)
             bubbleView?.setOnCloseListener {
-                if (_recordingState.value == RecordingState.IDLE) {
+                if (stateManager.recordingState.value == RecordingState.IDLE) {
                     stopSelf()
                 }
             }
-            bubbleView?.setStateCallback { state ->
-                // Handle state changes from bubble if needed
-            }
         } else {
-            bubbleView?.updateState(_recordingState.value)
+            bubbleView?.updateState(stateManager.recordingState.value)
         }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        Log.d(TAG, "Service onDestroy")
         super.onDestroy()
         releaseResources()
     }
@@ -168,78 +174,139 @@ class RecordingForegroundService : Service() {
     }
 
     private fun startRecording(resultCode: Int, data: Intent) {
-        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mgr.getMediaProjection(resultCode, data)
-
-        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val metrics = android.util.DisplayMetrics()
-        @Suppress("DEPRECATION")
-        windowManager.defaultDisplay.getRealMetrics(metrics)
+        Log.d(TAG, "startRecording")
         
-        // Ensure even dimensions
-        val screenWidth = metrics.widthPixels and 0xFFFFFFFE.toInt()
-        val screenHeight = metrics.heightPixels and 0xFFFFFFFE.toInt()
-        val density = metrics.densityDpi
-
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val fileName = "Rekodi_$timestamp.mp4"
-        val dir = getExternalFilesDir(null)
-        outputFile = File(dir, fileName)
-
-        mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(this)
-        } else {
-            @Suppress("DEPRECATION")
-            MediaRecorder()
-        }.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setVideoSource(MediaRecorder.VideoSource.SURFACE)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setVideoEncodingBitRate(8_000_000)
-            setVideoFrameRate(30)
-            setVideoSize(screenWidth, screenHeight)
-            setOutputFile(outputFile?.absolutePath)
-            prepare()
-        }
-
-        val surface = mediaRecorder?.surface
-        if (surface != null) {
-            virtualDisplay = mediaProjection?.createVirtualDisplay(
-                "RekodiDisplay",
-                screenWidth, screenHeight, density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                surface, null, null
-            )
-        }
-
-        mediaRecorder?.start()
-        _recordingState.value = RecordingState.RECORDING
-        updateNotification()
-        startTimer()
-
+        stateManager.updateState(RecordingState.COUNTDOWN)
+        bubbleView?.updateState(RecordingState.COUNTDOWN)
+        
         serviceScope.launch {
-            val entity = RecordingEntity(
-                filePath = outputFile?.absolutePath ?: "",
-                fileName = fileName,
-                mimeType = "video/mp4",
-                frameRate = 30,
-                bitrate = 8_000_000,
-                resolution = "${screenWidth}x${screenHeight}"
-            )
-            recordingId = recordingRepository.insertRecording(entity)
+            for (i in 3 downTo 1) {
+                if (stateManager.recordingState.value != RecordingState.COUNTDOWN) return@launch
+                mainHandler.post {
+                    bubbleView?.updateTimerText(i.toString())
+                }
+                delay(1000)
+            }
+            
+            if (stateManager.recordingState.value != RecordingState.COUNTDOWN) return@launch
+            
+            mainHandler.post {
+                performStart(resultCode, data)
+            }
+        }
+    }
+
+    private fun performStart(resultCode: Int, data: Intent) {
+        serviceScope.launch {
+            try {
+                val settings = settingsDataStore.settings.first()
+                val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                mediaProjection = mgr.getMediaProjection(resultCode, data)
+                mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        Log.d(TAG, "MediaProjection stopped")
+                        stopRecording()
+                    }
+                }, mainHandler)
+
+                val metrics = android.util.DisplayMetrics()
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay.getRealMetrics(metrics)
+
+                val screenWidth = metrics.widthPixels and 0xFFFFFFFE.toInt()
+                val screenHeight = metrics.heightPixels and 0xFFFFFFFE.toInt()
+                val density = metrics.densityDpi
+
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val fileName = "Rekodi_$timestamp.mp4"
+                val dir = getExternalFilesDir(null)
+                outputFile = File(dir, fileName)
+
+                mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    MediaRecorder(this@RecordingForegroundService)
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaRecorder()
+                }.apply {
+                    val hasAudioPerm = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    if (hasAudioPerm && settings.audioSource != "Mute") {
+                        setAudioSource(MediaRecorder.AudioSource.MIC)
+                    }
+                    setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                    if (hasAudioPerm && settings.audioSource != "Mute") {
+                        setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    }
+                    
+                    val targetBitrate = when (settings.videoBitrate) {
+                        "Low" -> 2_000_000
+                        "Medium" -> 8_000_000
+                        "High" -> 16_000_000
+                        else -> 8_000_000
+                    }
+                    
+                    setVideoEncodingBitRate(targetBitrate)
+                    setVideoFrameRate(settings.videoFps)
+                    setVideoSize(screenWidth, screenHeight)
+                    setOutputFile(outputFile?.absolutePath)
+                    prepare()
+                }
+
+                val surface = mediaRecorder?.surface
+                if (surface != null) {
+                    virtualDisplay = mediaProjection?.createVirtualDisplay(
+                        "RekodiDisplay",
+                        screenWidth, screenHeight, density,
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                        surface, null, null
+                    )
+                    Log.d(TAG, "VirtualDisplay created: $screenWidth x $screenHeight")
+                } else {
+                    throw IllegalStateException("MediaRecorder surface is null")
+                }
+
+                mediaRecorder?.start()
+                Log.d(TAG, "MediaRecorder started")
+                mainHandler.post {
+                    stateManager.updateState(RecordingState.RECORDING)
+                    bubbleView?.updateState(RecordingState.RECORDING)
+                    updateNotification()
+                    startTimer()
+                }
+
+                val bitrateForEntity = when (settings.videoBitrate) {
+                    "Low" -> 2_000_000
+                    "Medium" -> 8_000_000
+                    "High" -> 16_000_000
+                    else -> 8_000_000
+                }
+
+                val entity = RecordingEntity(
+                    filePath = outputFile?.absolutePath ?: "",
+                    fileName = fileName,
+                    mimeType = "video/mp4",
+                    frameRate = settings.videoFps,
+                    bitrate = bitrateForEntity,
+                    resolution = "${screenWidth}x${screenHeight}"
+                )
+                recordingId = recordingRepository.insertRecording(entity)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to perform start", e)
+                stopRecording()
+            }
         }
     }
 
     private fun stopRecording() {
+        Log.d(TAG, "stopRecording")
         try {
             mediaRecorder?.apply {
                 stop()
                 release()
             }
         } catch (e: Exception) {
-            android.util.Log.e("RecordingService", "Error stopping MediaRecorder", e)
+            Log.e(TAG, "Error stopping MediaRecorder", e)
         }
         mediaRecorder = null
         virtualDisplay?.release()
@@ -247,7 +314,7 @@ class RecordingForegroundService : Service() {
         mediaProjection?.stop()
         mediaProjection = null
 
-        _recordingState.value = RecordingState.IDLE
+        stateManager.updateState(RecordingState.IDLE)
         bubbleView?.updateState(RecordingState.IDLE)
         val elapsed = _elapsedSeconds.value
         _elapsedSeconds.value = 0
@@ -260,17 +327,16 @@ class RecordingForegroundService : Service() {
                         entity.copy(
                             durationMs = elapsed * 1000,
                             fileSizeBytes = outputFile?.length() ?: 0,
-                            tapCount = _tapCount.value
+                            tapCount = stateManager.tapCount.value
                         )
                     )
                 }
                 recordingId = -1
+                stateManager.resetTapCount()
             }
         }
 
         stopForeground(STOP_FOREGROUND_REMOVE)
-        // Only stop self if not showing bubble, or maybe we want to keep service alive for bubble?
-        // Let's keep it simple for now and stop everything.
         bubbleView?.hide()
         bubbleView = null
         stopSelf()
@@ -278,27 +344,34 @@ class RecordingForegroundService : Service() {
 
     private fun pauseRecording() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try { mediaRecorder?.pause() } catch (e: Exception) {
-                android.util.Log.e("RecordingService", "Error pausing MediaRecorder", e)
+            try { 
+                mediaRecorder?.pause() 
+                stateManager.updateState(RecordingState.PAUSED)
+                bubbleView?.updateState(RecordingState.PAUSED)
+                updateNotification()
+                Log.d(TAG, "Recording paused")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error pausing MediaRecorder", e)
             }
         }
-        _recordingState.value = RecordingState.PAUSED
-        bubbleView?.updateState(RecordingState.PAUSED)
-        updateNotification()
     }
 
     private fun resumeRecording() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try { mediaRecorder?.resume() } catch (e: Exception) {
-                android.util.Log.e("RecordingService", "Error resuming MediaRecorder", e)
+            try { 
+                mediaRecorder?.resume() 
+                stateManager.updateState(RecordingState.RECORDING)
+                bubbleView?.updateState(RecordingState.RECORDING)
+                updateNotification()
+                Log.d(TAG, "Recording resumed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resuming MediaRecorder", e)
             }
         }
-        _recordingState.value = RecordingState.RECORDING
-        bubbleView?.updateState(RecordingState.RECORDING)
-        updateNotification()
     }
 
     private fun safeguardRecording() {
+        Log.d(TAG, "safeguardRecording")
         try {
             mediaRecorder?.apply {
                 stop()
@@ -308,10 +381,11 @@ class RecordingForegroundService : Service() {
         mediaRecorder = null
         virtualDisplay?.release()
         virtualDisplay = null
-        _recordingState.value = RecordingState.IDLE
+        stateManager.updateState(RecordingState.IDLE)
     }
 
     private fun releaseResources() {
+        Log.d(TAG, "releaseResources")
         try { mediaRecorder?.release() } catch (_: Exception) {}
         try { virtualDisplay?.release() } catch (_: Exception) {}
         try { mediaProjection?.stop() } catch (_: Exception) {}
@@ -322,7 +396,7 @@ class RecordingForegroundService : Service() {
 
     private fun startTimer() {
         serviceScope.launch {
-            while (_recordingState.value == RecordingState.RECORDING) {
+            while (stateManager.recordingState.value == RecordingState.RECORDING) {
                 delay(1000)
                 _elapsedSeconds.value = _elapsedSeconds.value + 1
                 
@@ -348,7 +422,7 @@ class RecordingForegroundService : Service() {
 
         val pauseIntent = PendingIntent.getService(
             this, 1, Intent(this, RecordingForegroundService::class.java).apply {
-                action = if (_recordingState.value == RecordingState.PAUSED) ACTION_RESUME else ACTION_PAUSE
+                action = if (stateManager.recordingState.value == RecordingState.PAUSED) ACTION_RESUME else ACTION_PAUSE
             }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -357,20 +431,24 @@ class RecordingForegroundService : Service() {
         val secs = elapsed % 60
         val timeStr = String.format("%02d:%02d", mins, secs)
 
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Recording")
-            .setContentText("$timeStr · ${_tapCount.value} taps")
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(if (stateManager.recordingState.value == RecordingState.RECORDING) "Recording Screen" else "Rekodi is Ready")
+            .setContentText(if (stateManager.recordingState.value == RecordingState.RECORDING) "$timeStr · ${stateManager.tapCount.value} taps" else "Tap bubble to start")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .setSilent(true)
-            .addAction(
-                if (_recordingState.value == RecordingState.PAUSED)
+
+        if (stateManager.recordingState.value != RecordingState.IDLE) {
+            builder.addAction(
+                if (stateManager.recordingState.value == RecordingState.PAUSED)
                     android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
-                if (_recordingState.value == RecordingState.PAUSED) "Resume" else "Pause",
+                if (stateManager.recordingState.value == RecordingState.PAUSED) "Resume" else "Pause",
                 pauseIntent
             )
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopIntent)
-            .build()
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopIntent)
+        }
+
+        return builder.build()
     }
 
     private fun updateNotification() {

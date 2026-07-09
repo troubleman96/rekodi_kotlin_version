@@ -50,14 +50,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.camelcreatives.rekodi.ui.theme.RekodiAmber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AudioEditorScreen(
     onNavigateBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: AudioEditorViewModel = hiltViewModel()
 ) {
+    val recording by viewModel.recording.collectAsStateWithLifecycle()
+    
     var selectedTool by remember { mutableStateOf("trim") }
     var progress by remember { mutableFloatStateOf(0f) }
     var trimStart by remember { mutableFloatStateOf(0f) }
@@ -71,7 +76,7 @@ fun AudioEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Audio Editor") },
+                title = { Text(recording?.fileName ?: "Audio Editor") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")

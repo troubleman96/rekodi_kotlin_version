@@ -4,8 +4,10 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
+import com.camelcreatives.rekodi.recorder.model.RecordingState
 import com.camelcreatives.rekodi.recorder.overlay.ZoomOverlayView
 import com.camelcreatives.rekodi.recorder.service.RecordingForegroundService
+import com.camelcreatives.rekodi.recorder.service.RecordingStateManager
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -13,9 +15,7 @@ import javax.inject.Inject
 class TapDetectionAccessibilityService : AccessibilityService() {
 
     @Inject lateinit var zoomOverlay: ZoomOverlayView
-
-    private var tapCount = 0
-    private var isRecording = false
+    @Inject lateinit var stateManager: RecordingStateManager
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -29,11 +29,11 @@ class TapDetectionAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null || !isRecording) return
+        if (event == null || stateManager.recordingState.value != RecordingState.RECORDING) return
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED,
             AccessibilityEvent.TYPE_TOUCH_INTERACTION_START -> {
-                tapCount++
+                stateManager.incrementTapCount()
                 updateTapCount()
                 zoomOverlay.let {
                     event.source?.let { source ->
@@ -48,17 +48,10 @@ class TapDetectionAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    fun setRecording(recording: Boolean) {
-        isRecording = recording
-        if (!recording) tapCount = 0
-    }
-
-    fun resetTapCount() { tapCount = 0 }
-
     private fun updateTapCount() {
         val intent = Intent(this, RecordingForegroundService::class.java).apply {
             action = RecordingForegroundService.ACTION_UPDATE_TAP_COUNT
-            putExtra(RecordingForegroundService.EXTRA_TAP_COUNT, tapCount)
+            putExtra(RecordingForegroundService.EXTRA_TAP_COUNT, stateManager.tapCount.value)
         }
         startService(intent)
     }

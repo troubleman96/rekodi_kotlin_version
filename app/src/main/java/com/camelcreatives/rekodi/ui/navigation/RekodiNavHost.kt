@@ -9,7 +9,6 @@ import com.camelcreatives.rekodi.library.ui.LibraryScreen
 import com.camelcreatives.rekodi.settings.SettingsScreen
 import com.camelcreatives.rekodi.editor.ui.AudioEditorScreen
 import com.camelcreatives.rekodi.onboarding.OnboardingScreen
-import com.camelcreatives.rekodi.recorder.model.Recording
 
 object Routes {
     const val ONBOARDING = "onboarding"
@@ -24,15 +23,22 @@ object Routes {
 
 @Composable
 fun RekodiNavHost(
+    startDestination: String,
+    onOnboardingComplete: () -> Unit,
     navController: NavHostController = rememberNavController()
 ) {
     NavHost(
         navController = navController,
-        startDestination = Routes.HOME
+        startDestination = startDestination
     ) {
         composable(Routes.ONBOARDING) {
             OnboardingScreen(
-                onComplete = { navController.navigate(Routes.HOME) { popUpTo(Routes.ONBOARDING) { inclusive = true } } }
+                onComplete = {
+                    onOnboardingComplete()
+                    navController.navigate(Routes.HOME) {
+                        popUpTo(Routes.ONBOARDING) { inclusive = true }
+                    }
+                }
             )
         }
         composable(Routes.HOME) {

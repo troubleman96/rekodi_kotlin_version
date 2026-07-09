@@ -38,7 +38,8 @@ data class RekodiSettings(
     val darkMode: String = "System",
     val dynamicColor: Boolean = true,
     val language: String = "en",
-    val tapCountEnabled: Boolean = true
+    val tapCountEnabled: Boolean = true,
+    val onboardingCompleted: Boolean = false
 )
 
 @Singleton
@@ -69,6 +70,7 @@ class SettingsDataStore @Inject constructor(
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val LANGUAGE = stringPreferencesKey("language")
         val TAP_COUNT_ENABLED = booleanPreferencesKey("tap_count_enabled")
+        val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
     }
 
     val settings: Flow<RekodiSettings> = context.dataStore.data.map { prefs ->
@@ -95,7 +97,8 @@ class SettingsDataStore @Inject constructor(
             darkMode = prefs[DARK_MODE] ?: "System",
             dynamicColor = prefs[DYNAMIC_COLOR] ?: true,
             language = prefs[LANGUAGE] ?: "en",
-            tapCountEnabled = prefs[TAP_COUNT_ENABLED] ?: true
+            tapCountEnabled = prefs[TAP_COUNT_ENABLED] ?: true,
+            onboardingCompleted = prefs[ONBOARDING_COMPLETED] ?: false
         )
     }
 
@@ -167,5 +170,8 @@ class SettingsDataStore @Inject constructor(
     }
     suspend fun updateTapCountEnabled(value: Boolean) {
         context.dataStore.edit { it[TAP_COUNT_ENABLED] = value }
+    }
+    suspend fun updateOnboardingCompleted(value: Boolean) {
+        context.dataStore.edit { it[ONBOARDING_COMPLETED] = value }
     }
 }
