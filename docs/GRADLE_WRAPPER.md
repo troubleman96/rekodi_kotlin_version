@@ -5,7 +5,7 @@
 The Gradle Wrapper is a mechanism for running Gradle builds without requiring a pre-installed Gradle distribution on the build machine. It consists of a small JAR file (gradle-wrapper.jar), a properties file (gradle-wrapper.properties), and platform-specific shell scripts (gradlew for POSIX, gradlew.bat for Windows). The wrapper ensures that all developers and CI systems use the exact same Gradle version, eliminating "works on my machine" build issues caused by Gradle version differences.
 
 For the Rekodi project, the Gradle Wrapper is essential because:
-1. It pins the Gradle version to 8.7 (as specified in `gradle-wrapper.properties`), which is the version the project's build scripts have been tested against.
+1. It pins the Gradle version to 8.11.1 (as specified in `gradle-wrapper.properties`), which is the version the project's build scripts have been tested against.
 2. It eliminates the need for each developer to install Gradle manually or manage multiple Gradle versions.
 3. It enables CI/CD systems (like GitHub Actions) to build the project without pre-configuring a Gradle installation.
 4. It provides a consistent entry point (`./gradlew`) that works identically across macOS, Linux, and Windows.
@@ -50,7 +50,7 @@ This file configures which Gradle distribution the wrapper downloads:
 ```properties
 distributionBase=GRADLE_USER_HOME
 distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-bin.zip
 networkTimeout=10000
 validateDistributionUrl=true
 zipStoreBase=GRADLE_USER_HOME
@@ -58,7 +58,7 @@ zipStorePath=wrapper/dists
 ```
 
 Key properties:
-- **distributionUrl:** The URL to download Gradle 8.7. The `https\://` escaping is standard properties file format for the colon. The `-bin` suffix means the binary-only distribution (no sources or documentation).
+- **distributionUrl:** The URL to download Gradle 8.11.1. The `https\://` escaping is standard properties file format for the colon. The `-bin` suffix means the binary-only distribution (no sources or documentation).
 - **networkTimeout:** 10 seconds for network operations.
 - **validateDistributionUrl:** When true, the wrapper validates the distribution URL before downloading (security measure against URL injection attacks).
 - **distributionBase/distributionPath/zipStoreBase/zipStorePath:** Control where the downloaded Gradle distribution is cached locally. `GRADLE_USER_HOME` defaults to `~/.gradle` on Unix and `%USERPROFILE%\.gradle` on Windows.
@@ -81,11 +81,11 @@ The wrapper JAR's responsibilities include:
 
 1. The user runs `./gradlew build` (or any Gradle task).
 2. The shell script locates Java and launches the wrapper JAR.
-3. The wrapper JAR reads `gradle-wrapper.properties` and determines that Gradle 8.7 is needed.
+3. The wrapper JAR reads `gradle-wrapper.properties` and determines that Gradle 8.11.1 is needed.
 4. The wrapper checks `~/.gradle/wrapper/dists/gradle-8.7-bin/` for an existing installation.
 5. If not found, it downloads `gradle-8.7-bin.zip` from `services.gradle.org`.
 6. It extracts the ZIP to the wrapper cache.
-7. It launches the Gradle 8.7 runtime, passing through the original command-line arguments (`build` in this case).
+7. It launches the Gradle 8.11.1 runtime, passing through the original command-line arguments (`build` in this case).
 8. Gradle reads `settings.gradle.kts` and `build.gradle.kts` files and executes the requested tasks.
 
 This flow means the first build is slightly slower (due to the download), but subsequent builds use the cached distribution.
@@ -112,7 +112,7 @@ gradle wrapper --gradle-version 8.7 --update-distribution-url
 ```
 
 This command will:
-1. Download Gradle 8.7 (if not already cached).
+1. Download Gradle 8.11.1 (if not already cached).
 2. Generate/update `gradlew`, `gradlew.bat`, and `gradle/wrapper/gradle-wrapper.jar`.
 3. Update `gradle/wrapper/gradle-wrapper.properties` with the specified version.
 
@@ -150,7 +150,7 @@ This updates the wrapper to download Gradle 8.8 on future builds. The `gradle-wr
 ## Project-Specific Configuration
 
 For the Rekodi project, the Gradle wrapper is configured to use:
-- **Gradle 8.7** -- A stable version compatible with Android Gradle Plugin (AGP) and Kotlin 2.0+.
+- **Gradle 8.11.1** -- A stable version compatible with Android Gradle Plugin (AGP) and Kotlin 2.0+.
 - **Kotlin JVM Target 17** -- As defined in the build-logic convention plugins.
 - **Compile SDK 35** -- Android 15 API level.
 - **Minimum SDK 26** -- Android 8.0 (Oreo), the minimum supported version.
